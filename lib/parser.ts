@@ -3,6 +3,19 @@ const writers = require('./writers');
 import {Writer} from './writers';
 
 /**
+ * Helper to get all tabs recursively (including nested child tabs)
+ */
+function getAllTabs(tabs: object[], result: object[] = []): object[] {
+  for (const tab of tabs || []) {
+    result.push(tab);
+    if (tab['childTabs']) {
+      getAllTabs(tab['childTabs'], result);
+    }
+  }
+  return result;
+}
+
+/**
  * Function to parse Google Docs API Document
  * @param {object} document JSON object representing document
  * @param {Writer} writer Converter to appropriate text format
@@ -12,6 +25,38 @@ function parseDocument(
     document: object,
     writer: Writer = new writers.MarkdownWriter(),
 ): string {
+  // Handle multi-tab documents (when includeTabsContent is true)
+  if (document['tabs'] && document['tabs'].length > 0) {
+    const allTabs = getAllTabs(document['tabs']);
+    let allParsed: string[] = [];
+
+    for (const tab of allTabs) {
+      const docTab = tab['documentTab'];
+      if (!docTab || !docTab['body']) continue;
+
+      const body: object = docTab['body'];
+      const content: object[] = body['content'];
+      const lists: object = docTab['lists'] || {};
+      const listTracker: object = {};
+
+      const paragraphs: object[] = content
+          .filter((o) => o.hasOwnProperty('paragraph'))
+          .map((o) => o['paragraph']);
+
+      const parsed: string[] =
+        paragraphs.map((p) => parseParagraph(p, writer, lists, listTracker));
+
+      // Add tab title as header if multiple tabs
+      if (allTabs.length > 1 && tab['tabProperties'] && tab['tabProperties']['title']) {
+        allParsed.push(writer.addHeading(tab['tabProperties']['title'], 1));
+      }
+      allParsed = allParsed.concat(parsed);
+    }
+
+    return writer.finalize(allParsed);
+  }
+
+  // Fallback for single-tab or legacy documents
   const body: object = document['body'];
   const content: object[] = body['content'];
   const lists: object = document['lists'];

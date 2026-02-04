@@ -131,7 +131,7 @@ async function getDocumentWithAuth(auth) {
         auth: auth,
     });
     if (docId === null) throw new Error('docId was never set.');
-    const params = { documentId: docId };
+    const params = { documentId: docId, includeTabsContent: true };
     docs.documents.get(
         params,
         (err, res) => {
