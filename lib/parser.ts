@@ -39,17 +39,12 @@ function parseDocument(
       const lists: object = docTab['lists'] || {};
       const listTracker: object = {};
 
-      const paragraphs: object[] = content
-          .filter((o) => o.hasOwnProperty('paragraph'))
-          .map((o) => o['paragraph']);
-
-      const parsed: string[] =
-        paragraphs.map((p) => parseParagraph(p, writer, lists, listTracker));
-
       // Add tab title as header if multiple tabs
       if (allTabs.length > 1 && tab['tabProperties'] && tab['tabProperties']['title']) {
         allParsed.push(writer.addHeading(tab['tabProperties']['title'], 1));
       }
+
+      const parsed = parseContent(content, writer, lists, listTracker);
       allParsed = allParsed.concat(parsed);
     }
 
@@ -61,18 +56,78 @@ function parseDocument(
   const content: object[] = body['content'];
   const lists: object = document['lists'];
   const listTracker: object = {};
-  // fs.writeFileSync('test/list-sample.json', JSON.stringify(document));
-  const paragraphs: object[] = content
-      .filter((o) => o.hasOwnProperty('paragraph'))
-      .map((o) => o['paragraph']);
 
-  const parsed: string[] =
-    paragraphs.map((p) => parseParagraph(p, writer, lists, listTracker));
+  const parsed: string[] = parseContent(content, writer, lists, listTracker);
   const convertedFinal: string = writer.finalize(parsed);
   return convertedFinal;
 }
 
 exports.parseDocument = parseDocument;
+
+/**
+ * Process content array items in order, handling both paragraphs and tables
+ */
+function parseContent(
+    content: object[],
+    writer: Writer,
+    lists: object,
+    listTracker: object,
+): string[] {
+  const result: string[] = [];
+  for (const item of content) {
+    if (item.hasOwnProperty('paragraph')) {
+      result.push(parseParagraph(item['paragraph'], writer, lists, listTracker));
+    } else if (item.hasOwnProperty('table')) {
+      result.push(parseTable(item['table'], writer, lists, listTracker));
+    }
+  }
+  return result;
+}
+
+/**
+ * Parse a Google Docs table into a markdown table
+ */
+function parseTable(
+    table: object,
+    writer: Writer,
+    lists: object,
+    listTracker: object,
+): string {
+  const tableRows: object[] = table['tableRows'] || [];
+  const rows: string[][] = [];
+
+  for (const row of tableRows) {
+    const cells: string[] = [];
+    const tableCells: object[] = row['tableCells'] || [];
+    for (const cell of tableCells) {
+      const cellContent: object[] = cell['content'] || [];
+      const cellParts: string[] = [];
+      for (const item of cellContent) {
+        if (item.hasOwnProperty('paragraph')) {
+          const text = parseParagraph(item['paragraph'], writer, lists, listTracker);
+          const trimmed = text.replace(/\n/g, ' ').trim();
+          if (trimmed) cellParts.push(trimmed);
+        }
+      }
+      cells.push(cellParts.join(' '));
+    }
+    rows.push(cells);
+  }
+
+  if (rows.length === 0) return '';
+
+  // Build markdown table
+  const lines: string[] = [];
+  // Header row
+  lines.push('| ' + rows[0].join(' | ') + ' |');
+  // Separator
+  lines.push('| ' + rows[0].map(() => '---').join(' | ') + ' |');
+  // Data rows
+  for (let i = 1; i < rows.length; i++) {
+    lines.push('| ' + rows[i].join(' | ') + ' |');
+  }
+  return '\n' + lines.join('\n') + '\n';
+}
 
 /** Function to parse paragraph element and convert to Markdown
  * @param  {object} paragraph From 'paragraph' field

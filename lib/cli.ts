@@ -73,18 +73,33 @@ if (options.json) {
    */
   if (process.env.NODE_ENV !== 'test') {
     if (process.argv.length === 2) { // Make sure user passed an argument
-      console.error('Error: No Google Docs URL passed to program.');
+      console.error('Error: No Google Docs/Sheets URL passed to program.');
       program.help({error: true});
     }
     const inputtedId: string = program.args[0];
-    const docIdRegex = /\/document\/d\/([a-zA-Z0-9-_]+)/;
-    const matches = inputtedId.match(docIdRegex);
-    if (matches === null || matches.length < 2) {
-      console.error(`Error: Couldn't find docId in ${inputtedId}`);
-      program.help({error: true});
+
+    // Detect Google Sheets URLs
+    const sheetIdRegex = /\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/;
+    const sheetMatches = inputtedId.match(sheetIdRegex);
+
+    if (sheetMatches && sheetMatches.length >= 2) {
+      const spreadsheetId = sheetMatches[1];
+      // Extract gid from URL if present (e.g. ?gid=123 or #gid=123)
+      const gidRegex = /[?&#]gid=(\d+)/;
+      const gidMatch = inputtedId.match(gidRegex);
+      const gid = gidMatch ? parseInt(gidMatch[1], 10) : null;
+      docs.getSpreadsheet(spreadsheetId, gid);
+    } else {
+      // Google Docs URL
+      const docIdRegex = /\/document\/d\/([a-zA-Z0-9-_]+)/;
+      const matches = inputtedId.match(docIdRegex);
+      if (matches === null || matches.length < 2) {
+        console.error(`Error: Couldn't find document or spreadsheet ID in ${inputtedId}`);
+        program.help({error: true});
+      }
+      const docId = matches[1];
+      docs.getDocument(docId);
     }
-    const docId = matches[1];
-    docs.getDocument(docId);
   }
 }
 

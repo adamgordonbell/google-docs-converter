@@ -11,6 +11,8 @@ import destroyer from 'server-destroy';
 const homedir = os.homedir();
 
 let docId: string | null = null;
+let sheetId: string | null = null;
+let sheetGid: number | null = null;
 
 const keyPath = path.join(homedir, '.config', 'google-docs-converter', 'credentials.json');
 const tokenPath = path.join(homedir, '.config', 'google-docs-converter', 'tokens.json');
@@ -76,7 +78,10 @@ async function authenticate() {
             // grab the url that will be used for authorization
             const authorizeUrl = oauth2Client.generateAuthUrl({
                 access_type: 'offline',
-                scope: 'https://www.googleapis.com/auth/documents.readonly',
+                scope: [
+                    'https://www.googleapis.com/auth/documents.readonly',
+                    'https://www.googleapis.com/auth/spreadsheets.readonly',
+                ].join(' '),
             });
             const server = http
                 .createServer(async (req, res) => {
@@ -140,6 +145,107 @@ async function getDocumentWithAuth(auth) {
             }
             main.output(res.data);
         });
+}
+
+/**
+ * Get a Google Spreadsheet and output as CSV
+ * @param {string} id The ID of the Google Spreadsheet.
+ * @param {number|null} gid The gid of the specific sheet tab, or null for all/first.
+ */
+async function getSpreadsheet(id: string, gid: number | null) {
+    sheetId = id;
+    sheetGid = gid;
+    authenticate()
+        .then((client) => {
+            getSpreadsheetWithAuth(client);
+        })
+        .catch((err) => {
+            deleteTokenError();
+        })
+}
+exports.getSpreadsheet = getSpreadsheet;
+
+/**
+ * Escape a value for CSV output.
+ * Fields containing commas, double quotes, or newlines are wrapped in quotes.
+ * Double quotes within fields are escaped by doubling them.
+ */
+function csvEscape(value: string): string {
+    if (value === null || value === undefined) return '';
+    const str = String(value);
+    if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+        return '"' + str.replace(/"/g, '""') + '"';
+    }
+    return str;
+}
+
+/**
+ * Convert a 2D array of cell values to CSV string.
+ */
+function toCsv(rows: any[][]): string {
+    return rows.map(row => row.map(cell => csvEscape(cell)).join(',')).join('\n');
+}
+
+/**
+ * Connect to Google Sheets API, retrieve the spreadsheet data
+ */
+async function getSpreadsheetWithAuth(auth) {
+    if (process.env.NODE_ENV === 'test') return;
+    const sheets = google.sheets({
+        version: 'v4',
+        auth: auth,
+    });
+    if (sheetId === null) throw new Error('sheetId was never set.');
+
+    try {
+        // First get spreadsheet metadata to know sheet names and gids
+        const meta = await sheets.spreadsheets.get({
+            spreadsheetId: sheetId,
+            fields: 'sheets.properties',
+        });
+
+        const sheetProps = meta.data.sheets.map(s => s.properties);
+
+        if (sheetGid !== null) {
+            // Find the sheet matching the gid
+            const target = sheetProps.find(p => p.sheetId === sheetGid);
+            if (!target) {
+                console.error(`Error: No sheet found with gid=${sheetGid}`);
+                process.exit(1);
+            }
+            const resp = await sheets.spreadsheets.values.get({
+                spreadsheetId: sheetId,
+                range: target.title,
+            });
+            console.log(toCsv(resp.data.values || []));
+        } else if (sheetProps.length === 1) {
+            // Single sheet — just output it
+            const resp = await sheets.spreadsheets.values.get({
+                spreadsheetId: sheetId,
+                range: sheetProps[0].title,
+            });
+            console.log(toCsv(resp.data.values || []));
+        } else {
+            // Multiple sheets, no gid specified — output all with headers
+            for (let i = 0; i < sheetProps.length; i++) {
+                const prop = sheetProps[i];
+                const resp = await sheets.spreadsheets.values.get({
+                    spreadsheetId: sheetId,
+                    range: prop.title,
+                });
+                if (i > 0) console.log('');
+                console.log(`# ${prop.title}`);
+                console.log(toCsv(resp.data.values || []));
+            }
+        }
+    } catch (err: any) {
+        console.error("Sheets API error:", err?.message || err);
+        if (err?.code === 401) {
+            deleteTokenError();
+        } else {
+            process.exit(1);
+        }
+    }
 }
 
 /**
